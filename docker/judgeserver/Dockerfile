@@ -4,8 +4,9 @@
 FROM maven:3.8-eclipse-temurin-8 AS builder
 
 WORKDIR /build
+COPY docker/maven-settings.xml /root/.m2/settings.xml
 COPY hoj-springboot/ ./
-RUN mvn clean package -pl api,JudgeServer -am -DskipTests -q
+RUN mvn clean package -pl api,JudgeServer -am -DskipTests -B
 
 # ============================================================
 # 判题服务器：需要安装多种语言编译器/运行时

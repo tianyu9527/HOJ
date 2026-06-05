@@ -4,8 +4,9 @@
 FROM maven:3.8-eclipse-temurin-8 AS builder
 
 WORKDIR /build
+COPY docker/maven-settings.xml /root/.m2/settings.xml
 COPY hoj-springboot/ ./
-RUN mvn clean package -pl api,DataBackup -am -DskipTests -q
+RUN mvn clean package -pl api,DataBackup -am -DskipTests -B
 
 FROM eclipse-temurin:8-jre-jammy
 
