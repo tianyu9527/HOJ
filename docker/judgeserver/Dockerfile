@@ -1,7 +1,7 @@
 # ============================================================
 # HOJ JudgeServer - 从源码构建（含完整编译器环境）
 # ============================================================
-FROM maven:3.8-jdk-8 AS builder
+FROM maven:3.8-eclipse-temurin-8 AS builder
 
 WORKDIR /build
 COPY hoj-springboot/ ./

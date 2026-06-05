@@ -1,13 +1,13 @@
 # ============================================================
 # HOJ Backend (DataBackup) - 从源码构建
 # ============================================================
-FROM maven:3.8-jdk-8 AS builder
+FROM maven:3.8-eclipse-temurin-8 AS builder
 
 WORKDIR /build
 COPY hoj-springboot/ ./
 RUN mvn clean package -pl api,DataBackup -am -DskipTests -q
 
-FROM openjdk:8-jre-slim
+FROM eclipse-temurin:8-jre-jammy
 
 LABEL maintainer="tianyu9527"
 LABEL description="HOJ Backend Service (DataBackup)"
