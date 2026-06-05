@@ -1,0 +1,208 @@
+# ============================================================
+# HOJ - 从源码构建部署（基于 tianyu9527/HOJ fork）
+# ============================================================
+# 使用方法：
+#   首次部署：docker compose up -d --build
+#   更新部署：bash scripts/update.sh
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # 1. MySQL 数据库
+  # ----------------------------------------------------------
+  hoj-mysql:
+    image: mysql:8.0
+    container_name: hoj-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-hoj123456}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --event-scheduler=ON
+      - --max-connections=1000
+      - --innodb-buffer-pool-size=256M
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+      - ./sqlAndsetting/hoj.sql:/docker-entrypoint-initdb.d/01-hoj.sql
+      - ./sqlAndsetting/nacos.sql:/docker-entrypoint-initdb.d/02-nacos.sql
+    ports:
+      - "3306:3306"
+    networks:
+      hoj-network:
+        ipv4_address: 172.20.0.3
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-hoj123456}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ----------------------------------------------------------
+  # 2. Redis 缓存
+  # ----------------------------------------------------------
+  hoj-redis:
+    image: redis:7-alpine
+    container_name: hoj-redis
+    restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD:-hoj123456} --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "6379:6379"
+    networks:
+      hoj-network:
+        ipv4_address: 172.20.0.2
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-hoj123456}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------
+  # 3. Nacos 配置中心
+  # ----------------------------------------------------------
+  hoj-nacos:
+    image: nacos/nacos-server:v2.2.3
+    container_name: hoj-nacos
+    restart: always
+    environment:
+      MODE: standalone
+      SPRING_DATASOURCE_PLATFORM: mysql
+      MYSQL_SERVICE_HOST: 172.20.0.3
+      MYSQL_SERVICE_PORT: 3306
+      MYSQL_SERVICE_DB_NAME: nacos
+      MYSQL_SERVICE_USER: root
+      MYSQL_SERVICE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-hoj123456}
+      MYSQL_SERVICE_DB_PARAM: "characterEncoding=utf8&connectTimeout=10000&socketTimeout=30000&autoReconnect=true&useSSL=false&serverTimezone=Asia/Shanghai"
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+      JVM_XMN: 128m
+      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN:-SecretKey012345678901234567890123456789012345678901234567890123456789}
+      NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY:-serverIdentity}
+      NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE:-security}
+    volumes:
+      - ./data/nacos:/home/nacos/data
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+      - "9849:9849"
+    networks:
+      hoj-network:
+        ipv4_address: 172.20.0.4
+    depends_on:
+      hoj-mysql:
+        condition: service_healthy
+
+  # ----------------------------------------------------------
+  # 4. HOJ Backend（核心业务服务）
+  # ----------------------------------------------------------
+  hoj-backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    container_name: hoj-backend
+    restart: always
+    environment:
+      # Nacos
+      NACOS_URL: 172.20.0.4:8848
+      NACOS_USERNAME: nacos
+      NACOS_PASSWORD: ${NACOS_PASSWORD:-nacos}
+      # Redis
+      REDIS_HOST: 172.20.0.2
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-hoj123456}
+      # MySQL
+      MYSQL_HOST: 172.20.0.3
+      MYSQL_PORT: 3306
+      MYSQL_PUBLIC_HOST: 172.20.0.3
+      MYSQL_USERNAME: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-hoj123456}
+      MYSQL_DATABASE_NAME: hoj
+      # JWT
+      JWT_TOKEN_SECRET: ${JWT_TOKEN_SECRET:-hoj-secret-change-me}
+      JUDGE_TOKEN: ${JUDGE_TOKEN:-hoj-judge-token-change-me}
+      # 邮件（可选，后续在管理后台配置）
+      EMAIL_SERVER_HOST: ${EMAIL_SERVER_HOST:-smtp.qq.com}
+      EMAIL_SERVER_PORT: ${EMAIL_SERVER_PORT:-465}
+      EMAIL_USERNAME: ${EMAIL_USERNAME:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      # JVM
+      JAVA_OPTS: "-Xms256m -Xmx512m"
+    volumes:
+      - ./data/backend/log:/hoj/log/backend
+    ports:
+      - "6688:6688"
+    networks:
+      hoj-network:
+        ipv4_address: 172.20.0.5
+    depends_on:
+      hoj-nacos:
+        condition: service_started
+      hoj-redis:
+        condition: service_healthy
+
+  # ----------------------------------------------------------
+  # 5. HOJ JudgeServer（判题服务）
+  # ----------------------------------------------------------
+  hoj-judgeserver:
+    build:
+      context: .
+      dockerfile: docker/judgeserver/Dockerfile
+    container_name: hoj-judgeserver
+    restart: always
+    privileged: true
+    environment:
+      # Nacos
+      NACOS_URL: 172.20.0.4:8848
+      NACOS_USERNAME: nacos
+      NACOS_PASSWORD: ${NACOS_PASSWORD:-nacos}
+      # Judge 配置
+      JUDGE_SERVER_IP: 172.20.0.6
+      JUDGE_SERVER_PORT: 8088
+      JUDGE_SERVER_NAME: hoj-judger-1
+      MAX_TASK_NUM: -1
+      REMOTE_JUDGE_OPEN: "true"
+      REMOTE_JUDGE_MAX_TASK_NUM: -1
+      # JVM
+      JAVA_OPTS: "-Xms256m -Xmx1g"
+    volumes:
+      - ./data/judge/log:/judge/log/judgeserver
+    ports:
+      - "8088:8088"
+    networks:
+      hoj-network:
+        ipv4_address: 172.20.0.6
+    depends_on:
+      hoj-nacos:
+        condition: service_started
+
+  # ----------------------------------------------------------
+  # 6. HOJ Frontend（Vue 前端 + Nginx）
+  # ----------------------------------------------------------
+  hoj-web:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    container_name: hoj-web
+    restart: always
+    ports:
+      - "80:80"
+    networks:
+      hoj-network:
+        ipv4_address: 172.20.0.7
+    depends_on:
+      - hoj-backend
+
+# ============================================================
+# 自定义网络（固定 IP，与 Nacos 配置匹配）
+# ============================================================
+networks:
+  hoj-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
